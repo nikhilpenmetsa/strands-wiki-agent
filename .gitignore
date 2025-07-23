@@ -1,0 +1,32 @@
+# Build artifacts
+cdk.out/
+packaging/app.zip
+packaging/dependencies.zip
+packaging/_dependencies/
+
+# Other deployment directories
+../deploy_to_ec2/
+../deploy_to_fargate/
+
+# Node.js
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+.DS_Store
+output.json
