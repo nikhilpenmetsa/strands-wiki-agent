@@ -1,9 +1,11 @@
 from strands import Agent
-from strands_tools import retrieve
 from strands.models import BedrockModel
 from typing import Dict, Any
 import json
 import os
+
+# Import custom retrieve tool
+from custom_tools import custom_retrieve
 
 # Define encyclopedia system prompt
 ENCYCLOPEDIA_SYSTEM_PROMPT = """You are an encyclopedia assistant with access to a knowledge base.
@@ -51,6 +53,9 @@ def handler(event: Dict[str, Any], _context) -> Dict[str, Any]:
         # Set knowledge base ID as environment variable for retrieve tool
         os.environ["KNOWLEDGE_BASE_ID"] = knowledge_base_id
         
+        # Set model ID for retrieve_and_generate
+        os.environ["MODEL_ID"] = "anthropic.claude-3-sonnet-20240229-v1:0"
+        
         # Get guardrail ID from environment (optional)
         guardrail_id = os.environ.get('GUARDRAIL_ID')
         
@@ -67,14 +72,17 @@ def handler(event: Dict[str, Any], _context) -> Dict[str, Any]:
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0"
             )
         
-        # Create encyclopedia agent with retrieve tool and guardrailed model
+        # Create encyclopedia agent with custom retrieve tool and guardrailed model
         encyclopedia_agent = Agent(
             model=model,
             system_prompt=ENCYCLOPEDIA_SYSTEM_PROMPT,
-            tools=[retrieve],
+            tools=[custom_retrieve],
         )
 
         response = encyclopedia_agent(prompt)
+        
+        # Print response to Lambda logs
+        print(f"Encyclopedia agent response: {response}")
         
         return {
             'statusCode': 200,

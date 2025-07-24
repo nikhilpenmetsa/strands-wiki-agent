@@ -51,6 +51,7 @@ export class EncyclopediaAgentStack extends Stack {
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream",
           "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate",
           "bedrock:ApplyGuardrail",
         ],
         resources: ["*"],
