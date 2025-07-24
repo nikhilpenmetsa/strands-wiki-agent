@@ -33,16 +33,19 @@ def custom_retrieve(text: str, numberOfResults: int = 10, knowledgeBaseId: str =
         model_id = os.getenv("MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0")
         model_arn = f"arn:aws:bedrock:{region}::foundation-model/{model_id}"
         
+        # Get sessionId if provided
+        session_id = os.getenv("SESSION_ID")
+        
         logger.info(f"[custom_retrieve] Using knowledge base ID: {kb_id}")
         logger.info(f"[custom_retrieve] Using model ARN: {model_arn}")
         
         # Initialize Bedrock client
         bedrock_runtime = boto3.client("bedrock-agent-runtime", region_name=region)
 
-        # Use retrieve_and_generate to get citations
-        response = bedrock_runtime.retrieve_and_generate(
-            input={"text": text},
-            retrieveAndGenerateConfiguration={
+        # Prepare retrieve_and_generate parameters
+        retrieve_params = {
+            "input": {"text": text},
+            "retrieveAndGenerateConfiguration": {
                 "type": "KNOWLEDGE_BASE",
                 "knowledgeBaseConfiguration": {
                     "knowledgeBaseId": kb_id,
@@ -63,7 +66,15 @@ def custom_retrieve(text: str, numberOfResults: int = 10, knowledgeBaseId: str =
                     }
                 }
             }
-        )
+        }
+        
+        # Add sessionId if provided
+        if session_id:
+            retrieve_params["sessionId"] = session_id
+            logger.info(f"[custom_retrieve] Using sessionId: {session_id}")
+
+        # Use retrieve_and_generate to get citations
+        response = bedrock_runtime.retrieve_and_generate(**retrieve_params)
         
         # Log the full response structure
         logger.info(f"[custom_retrieve] Full response keys: {list(response.keys())}")
@@ -73,21 +84,76 @@ def custom_retrieve(text: str, numberOfResults: int = 10, knowledgeBaseId: str =
         
         # Extract citations from the response
         citations = []
+        citation_groups_by_span = {}
+        
         if "citations" in response:
             logger.info(f"[custom_retrieve] Found {len(response['citations'])} citation groups")
             
-            for citation_group in response.get("citations", []):
+            # First pass: organize citation groups by span to detect duplicates
+            for i, citation_group in enumerate(response.get("citations", [])):
+                # Extract span information if available
+                span = None
+                if "generatedResponsePart" in citation_group and "textResponsePart" in citation_group["generatedResponsePart"]:
+                    span_data = citation_group["generatedResponsePart"]["textResponsePart"].get("span")
+                    if span_data:
+                        # Create a span key for deduplication
+                        span_key = f"{span_data.get('start')}:{span_data.get('end')}"
+                        if span_key not in citation_groups_by_span:
+                            citation_groups_by_span[span_key] = []
+                        citation_groups_by_span[span_key].append((i, citation_group))
+                        span = span_data
+                
                 if "retrievedReferences" in citation_group:
                     for ref in citation_group.get("retrievedReferences", []):
                         citation = {
                             "id": f"doc-{len(citations)+1}",
-                            "location": ref.get("location", {}),
+                            "source": ref.get("location", {}).get("s3Location", {}).get("uri", "Unknown"),
                             "content": ref.get("content", {}).get("text", "")[:500] + "...",
-                            "metadata": ref.get("metadata", {})
+                            "metadata": ref.get("metadata", {}),
+                            "span": span,  # Include span information
+                            "group_index": i  # Track which group this came from
                         }
                         citations.append(citation)
         
         logger.info(f"[custom_retrieve] Extracted {len(citations)} citations")
+        
+        # Advanced deduplication based on multiple factors
+        deduplicated_citations = []
+        seen_keys = set()
+        
+        # Sort citations by group_index to maintain order
+        citations.sort(key=lambda c: c.get("group_index", 0))
+        
+        for citation in citations:
+            chunk_id = citation.get("metadata", {}).get("x-amz-bedrock-kb-chunk-id")
+            source = citation.get("source", "")
+            span_data = citation.get("span", {})
+            span_key = "none"
+            if span_data:
+                span_key = f"{span_data.get('start')}:{span_data.get('end')}"
+            
+            # Create a composite key for deduplication
+            dedup_key = f"{chunk_id}:{source}:{span_key}"
+            
+            # Skip if we've seen this exact combination before
+            if dedup_key in seen_keys:
+                continue
+            
+            seen_keys.add(dedup_key)
+            
+            # Remove the temporary group_index field before adding to final results
+            if "group_index" in citation:
+                del citation["group_index"]
+                
+            deduplicated_citations.append(citation)
+        
+        logger.info(f"[custom_retrieve] Deduplicated from {len(citations)} to {len(deduplicated_citations)} citations")
+        
+        logger.info(f"[custom_retrieve] Deduplicated from {len(citations)} to {len(deduplicated_citations)} citations")
+        
+        # Store deduplicated citations and sessionId for later retrieval
+        custom_retrieve.last_citations = deduplicated_citations
+        custom_retrieve.last_session_id = response.get("sessionId")
         
         # Get the answer text
         answer_text = response.get("output", {}).get("text", "No relevant information found.")
@@ -128,3 +194,8 @@ def format_answer_with_citations(answer_text: str, citations: List[Dict[str, Any
             citation_text += f"    Snippet: {citation['content']}\n"
     
     return answer_text + citation_text
+
+
+# Initialize storage for citations and sessionId after function definition
+custom_retrieve.last_citations = []
+custom_retrieve.last_session_id = None
